@@ -1,9 +1,8 @@
 const bcrypt = require("bcryptjs");
-const { v4: uuidv4 } = require("uuid");
 const jwt = require("jsonwebtoken");
-const User = require("./models/User");
+const User = require("../models/User");
 
-const SECRET = "mysecretkey";
+const SECRET = process.env.JWT_SECRET_KEY;
 
 exports.signupUser = async ({ name, email, password }) => {
   const userExists = await User.findOne({ email });
@@ -11,8 +10,6 @@ exports.signupUser = async ({ name, email, password }) => {
     return { success: false, message: "User already exists" };
   }
 
-  const user_id = uuidv4();
-  const token = uuidv4();
   const hashedPassword = bcrypt.hashSync(password, 10);
 
   const newUser = new User({
