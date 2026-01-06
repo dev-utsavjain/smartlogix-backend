@@ -52,5 +52,13 @@ exports.loginUser = async ({ email, password }) => {
     { expiresIn: "1d" }
   );
 
-  return { token };
+  return { 
+    token,
+    user: {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role
+    }
+  };
 };

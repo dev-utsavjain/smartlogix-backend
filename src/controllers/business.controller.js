@@ -9,9 +9,13 @@ exports.upsertProfile = async (req, res) => {
       businessType,
       contactPerson,
       contactPhone,
+      location,
       city,
       state
     } = req.body;
+
+    // Handle location whether passed as an object or flat fields
+    const locationData = location || { city, state };
 
     const profile = await BusinessProfile.findOneAndUpdate(
       { userId: req.user.id },
@@ -20,16 +24,14 @@ exports.upsertProfile = async (req, res) => {
         businessType,
         contactPerson,
         contactPhone,
-        location: {
-          city,
-          state
-        }
+        location: locationData
       },
       { new: true, upsert: true }
     );
 
     res.json(profile);
   } catch (err) {
+    console.error("Profile update error:", err);
     res.status(500).json({ message: "Profile update failed" });
   }
 };

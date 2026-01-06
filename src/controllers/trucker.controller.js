@@ -4,20 +4,23 @@ const TruckerProfile = require("../models/TruckerProfile");
 
 exports.upsertProfile = async (req, res) => {
   try {
-    const { vehicleType, capacity, city, lat, lng } = req.body;
+    const { vehicleType, capacity, currentLocation, city, lat, lng } = req.body;
+
+    const locationData = currentLocation || { city, lat, lng };
 
     const profile = await TruckerProfile.findOneAndUpdate(
       { userId: req.user.id },
       {
         vehicleType,
         capacity,
-        currentLocation: { city, lat, lng }
+        currentLocation: locationData
       },
       { new: true, upsert: true }
     );
 
     res.json(profile);
   } catch (err) {
+    console.error("Profile update error:", err);
     res.status(500).json({ message: "Profile update failed" });
   }
 };
