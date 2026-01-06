@@ -2,18 +2,32 @@ const express = require("express");
 const router = express.Router();
 const auth = require("../middleware/auth.middleware");
 const role = require("../middleware/role.middleware");
-const { createLoad, getMyLoads, getAvailableLoads, acceptLoad } = require("../controllers/load.controller");
+const { 
+  createLoad, 
+  getMyLoads, 
+  assignTrucker, 
+  cancelLoad, 
+  closeLoad,
+  
+  getAvailableLoads, 
+  getMyJobs, 
+  acceptLoad, 
+  pickupLoad, 
+  deliverLoad 
+} = require("../controllers/load.controller");
 
-// Business: Post a load
+// --- Business Routes ---
 router.post("/", auth, role(["BUSINESS"]), createLoad);
-
-// Business: Get my posted loads
 router.get("/my-loads", auth, role(["BUSINESS"]), getMyLoads);
+router.patch("/:loadId/assign", auth, role(["BUSINESS"]), assignTrucker);
+router.patch("/:loadId/cancel", auth, role(["BUSINESS"]), cancelLoad);
+router.patch("/:loadId/close", auth, role(["BUSINESS"]), closeLoad);
 
-// Trucker: Get available loads
+// --- Trucker Routes ---
 router.get("/available", auth, role(["TRUCKER"]), getAvailableLoads);
-
-// Trucker: Accept a load
+router.get("/my-jobs", auth, role(["TRUCKER"]), getMyJobs);
 router.patch("/:loadId/accept", auth, role(["TRUCKER"]), acceptLoad);
+router.patch("/:loadId/pickup", auth, role(["TRUCKER"]), pickupLoad);
+router.patch("/:loadId/deliver", auth, role(["TRUCKER"]), deliverLoad);
 
 module.exports = router;

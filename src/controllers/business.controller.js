@@ -11,7 +11,8 @@ exports.upsertProfile = async (req, res) => {
       contactPhone,
       location,
       city,
-      state
+      state,
+      gstin // Phase 2
     } = req.body;
 
     // Handle location whether passed as an object or flat fields
@@ -24,7 +25,8 @@ exports.upsertProfile = async (req, res) => {
         businessType,
         contactPerson,
         contactPhone,
-        location: locationData
+        location: locationData,
+        gstin
       },
       { new: true, upsert: true }
     );
