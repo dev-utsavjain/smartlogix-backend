@@ -49,7 +49,7 @@ exports.loginUser = async ({ email, password }) => {
       role: user.role
      },
     process.env.JWT_SECRET_KEY,
-    { expiresIn: "1d" }
+    { expiresIn: "12h" }
   );
 
   return { 

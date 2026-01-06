@@ -1,9 +1,13 @@
 // src/controllers/trucker.controller.js
 
 const TruckerProfile = require("../models/TruckerProfile");
+const { validateFields } = require("../utils/validation");
 
 exports.upsertProfile = async (req, res) => {
   try {
+    const required = ["vehicleType", "capacity", "city"];
+    validateFields(req.body, required);
+
     const { 
       vehicleType, 
       capacity, 

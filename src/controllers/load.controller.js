@@ -1,27 +1,53 @@
 const Load = require("../models/Load");
 const TruckerProfile = require("../models/TruckerProfile");
+const { validateTransition } = require("../utils/freightStateMachine");
+const { validateFields } = require("../utils/validation");
 
-// --- Helper for History ---
-const updateStatus = (load, newStatus, userId) => {
-  load.status = newStatus;
-  load.history.push({
-    status: newStatus,
-    updatedBy: userId,
-    timestamp: new Date()
-  });
+// --- Helper for Atomic Update ---
+const executeAtomicTransition = async (loadId, currentStatus, nextStatus, userId, updateFields = {}) => {
+  const query = { 
+    _id: loadId, 
+    status: currentStatus
+  };
+
+  const update = {
+    $set: { 
+      status: nextStatus, 
+      ...updateFields 
+    },
+    $push: {
+      history: {
+        status: nextStatus,
+        updatedBy: userId,
+        timestamp: new Date()
+      }
+    }
+  };
+
+  const load = await Load.findOneAndUpdate(query, update, { new: true });
+  
+  if (!load) {
+    // Check if load exists at all to give better error
+    const check = await Load.findById(loadId);
+    if (!check) throw new Error("Load not found");
+    throw new Error(`Load status mismatch. Expected '${currentStatus}' but found '${check.status}'. Transition failed.`);
+  }
+
+  return load;
 };
 
 // --- Business Endpoints ---
 
 exports.createLoad = async (req, res) => {
   try {
-    const { 
+    const required = ["origin", "destination", "cargoType", "weight", "price", "pickupDate", "vehicleTypeRequired"];
+    validateFields(req.body, required);
+
+    const {
       origin, destination, cargoType, weight, price, pickupDate, vehicleTypeRequired,
       originCoords, destinationCoords, distance 
     } = req.body;
 
-    // Construct GeoJSON if coords provided (UI should send [lng, lat])
-    // If not provided, we just rely on string address for now, but backend supports GeoJSON
     const originLocation = originCoords ? { type: "Point", coordinates: originCoords } : undefined;
     const destinationLocation = destinationCoords ? { type: "Point", coordinates: destinationCoords } : undefined;
 
@@ -43,7 +69,7 @@ exports.createLoad = async (req, res) => {
 
     res.status(201).json(newLoad);
   } catch (err) {
-    res.status(500).json({ message: "Failed to create load", error: err.message });
+    res.status(400).json({ message: err.message });
   }
 };
 
@@ -58,76 +84,106 @@ exports.getMyLoads = async (req, res) => {
   }
 };
 
+exports.getLoadDetails = async (req, res) => {
+  try {
+    const { loadId } = req.params;
+    const load = await Load.findById(loadId).populate("assignedTo", "name email");
+    
+    if (!load) return res.status(404).json({ message: "Load not found" });
+
+    // Security: Only creator or assigned trucker can see details
+    const isCreator = String(load.createdBy) === req.user.id;
+    const isAssigned = load.assignedTo && String(load.assignedTo._id) === req.user.id;
+
+    if (!isCreator && !isAssigned) {
+      return res.status(403).json({ message: "Not authorized to view these details" });
+    }
+
+    let truckerProfile = null;
+    if (load.assignedTo) {
+      truckerProfile = await TruckerProfile.findOne({ userId: load.assignedTo._id });
+    }
+
+    res.json({ load, truckerProfile });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to fetch load details", error: err.message });
+  }
+};
+
 exports.assignTrucker = async (req, res) => {
   try {
     const { loadId } = req.params;
-    const { truckerId } = req.body; // Business manually selects a trucker (if we had a list of applicants)
     
-    // In this simplified flow, "MATCHED" means a trucker already accepted. 
-    // So the business is confirming *that* trucker.
-    
-    const load = await Load.findById(loadId);
-    if (!load) return res.status(404).json({ message: "Load not found" });
+    // 1. Ownership check (Must find doc first to verify owner)
+    const loadCheck = await Load.findById(loadId);
+    if (!loadCheck) return res.status(404).json({ message: "Load not found" });
+    if (String(loadCheck.createdBy) !== req.user.id) return res.status(403).json({ message: "Not authorized" });
 
-    // Business must own the load
-    if (load.createdBy.toString() !== req.user.id) {
-      return res.status(403).json({ message: "Not authorized" });
-    }
+    // 2. Validate Transition
+    validateTransition(loadCheck.status, "ASSIGNED", "BUSINESS");
 
-    if (load.status !== "MATCHED") {
-      return res.status(400).json({ message: "Load must be in MATCHED state to assign" });
-    }
+    // 3. Atomic Update
+    const updatedLoad = await executeAtomicTransition(
+      loadId, 
+      "MATCHED", 
+      "ASSIGNED", 
+      req.user.id
+    );
 
-    // Use the trucker who accepted (stored in assignedTo temporarily or we confirm it now)
-    // In our flow: Trucker 'accepts' -> MATCHED. We store that trucker in assignedTo?
-    // Let's assume acceptLoad puts the trucker in assignedTo but status is MATCHED.
-    
-    updateStatus(load, "ASSIGNED", req.user.id);
-    await load.save();
-
-    res.json({ message: "Trucker confirmed. Load assigned.", load });
+    res.json({ message: "Trucker confirmed. Load assigned.", load: updatedLoad });
   } catch (err) {
-    res.status(500).json({ message: "Failed to assign load", error: err.message });
+    res.status(400).json({ message: err.message });
   }
 };
 
 exports.cancelLoad = async (req, res) => {
   try {
     const { loadId } = req.params;
-    const load = await Load.findById(loadId);
     
-    if (!load) return res.status(404).json({ message: "Load not found" });
-    if (load.createdBy.toString() !== req.user.id) return res.status(403).json({ message: "Not authorized" });
+    const loadCheck = await Load.findById(loadId);
+    if (!loadCheck) return res.status(404).json({ message: "Load not found" });
+    if (String(loadCheck.createdBy) !== req.user.id) return res.status(403).json({ message: "Not authorized" });
 
-    if (!["POSTED", "MATCHED"].includes(load.status)) {
-      return res.status(400).json({ message: "Cannot cancel load in progress" });
-    }
+    validateTransition(loadCheck.status, "CANCELLED", "BUSINESS");
 
-    updateStatus(load, "CANCELLED", req.user.id);
-    await load.save();
-    res.json({ message: "Load cancelled", load });
+    // Atomic Update with flexible current status (POSTED or MATCHED)
+    // We reuse logic but need custom query for this specific case since executeAtomicTransition takes single string
+    // Or we just pass the current status we found. Race condition risk is small here but exists if status changed *after* find.
+    // Ideally we pass loadCheck.status. If it changed in between, the update fails, ensuring atomicity.
+    
+    const updatedLoad = await executeAtomicTransition(
+      loadId, 
+      loadCheck.status, 
+      "CANCELLED", 
+      req.user.id
+    );
+
+    res.json({ message: "Load cancelled", load: updatedLoad });
   } catch (err) {
-    res.status(500).json({ message: "Failed to cancel load", error: err.message });
+    res.status(400).json({ message: err.message });
   }
 };
 
 exports.closeLoad = async (req, res) => {
   try {
     const { loadId } = req.params;
-    const load = await Load.findById(loadId);
     
-    if (!load) return res.status(404).json({ message: "Load not found" });
-    if (load.createdBy.toString() !== req.user.id) return res.status(403).json({ message: "Not authorized" });
+    const loadCheck = await Load.findById(loadId);
+    if (!loadCheck) return res.status(404).json({ message: "Load not found" });
+    if (String(loadCheck.createdBy) !== req.user.id) return res.status(403).json({ message: "Not authorized" });
 
-    if (load.status !== "DELIVERED") {
-      return res.status(400).json({ message: "Load must be delivered before closing" });
-    }
+    validateTransition(loadCheck.status, "CLOSED", "BUSINESS");
 
-    updateStatus(load, "CLOSED", req.user.id);
-    await load.save();
-    res.json({ message: "Load closed successfully", load });
+    const updatedLoad = await executeAtomicTransition(
+      loadId, 
+      "DELIVERED", 
+      "CLOSED", 
+      req.user.id
+    );
+
+    res.json({ message: "Load closed successfully", load: updatedLoad });
   } catch (err) {
-    res.status(500).json({ message: "Failed to close load", error: err.message });
+    res.status(400).json({ message: err.message });
   }
 };
 
@@ -140,21 +196,17 @@ exports.getAvailableLoads = async (req, res) => {
     
     let query = { status: "POSTED" };
     
-    // 1. Filter by vehicle/capacity
     if (truckerProfile) {
       query.weight = { $lte: truckerProfile.capacity };
       query.vehicleTypeRequired = truckerProfile.vehicleType;
       
-      // 2. Geospatial query (Phase 2)
-      // If trucker has location, find loads starting near them (e.g. 100km)
       if (truckerProfile.currentLocation && truckerProfile.currentLocation.coordinates && truckerProfile.currentLocation.coordinates.length === 2) {
-         // Only if valid coords (not 0,0)
          const [lng, lat] = truckerProfile.currentLocation.coordinates;
          if (lng !== 0 || lat !== 0) {
              query.originLocation = {
                  $near: {
                      $geometry: { type: "Point", coordinates: [lng, lat] },
-                     $maxDistance: 100000 // 100km
+                     $maxDistance: 100000 
                  }
              };
          }
@@ -180,62 +232,72 @@ exports.getMyJobs = async (req, res) => {
 exports.acceptLoad = async (req, res) => {
   try {
     const { loadId } = req.params;
-    const load = await Load.findById(loadId);
     
-    if (!load) return res.status(404).json({ message: "Load not found" });
-
-    if (load.status !== "POSTED") {
-      return res.status(400).json({ message: "Load is not available" });
-    }
-
-    // Transition to MATCHED
-    // We tentatively assign to this trucker
-    load.assignedTo = req.user.id;
-    updateStatus(load, "MATCHED", req.user.id);
+    // We can skip ownership check for accepting, BUT we must ensure status is POSTED
+    // If multiple truckers click Accept at same time, only one wins due to atomic update on POSTED status
     
-    await load.save();
-    res.json({ message: "Load accepted. Waiting for business approval.", load });
+    // Pre-check for better error message (optional, but good for UX)
+    const loadCheck = await Load.findById(loadId);
+    if (!loadCheck) return res.status(404).json({ message: "Load not found" });
+    
+    validateTransition(loadCheck.status, "MATCHED", "TRUCKER");
+
+    const updatedLoad = await executeAtomicTransition(
+      loadId, 
+      "POSTED", 
+      "MATCHED", 
+      req.user.id,
+      { assignedTo: req.user.id } // Set assignment tentatively
+    );
+
+    res.json({ message: "Load accepted. Waiting for business approval.", load: updatedLoad });
   } catch (err) {
-    res.status(500).json({ message: "Failed to accept load", error: err.message });
+    res.status(400).json({ message: err.message });
   }
 };
 
 exports.pickupLoad = async (req, res) => {
   try {
     const { loadId } = req.params;
-    const load = await Load.findById(loadId);
     
-    if (!load) return res.status(404).json({ message: "Load not found" });
-    if (String(load.assignedTo) !== req.user.id) return res.status(403).json({ message: "Not assigned to you" });
+    const loadCheck = await Load.findById(loadId);
+    if (!loadCheck) return res.status(404).json({ message: "Load not found" });
+    if (String(loadCheck.assignedTo) !== req.user.id) return res.status(403).json({ message: "Not assigned to you" });
 
-    if (load.status !== "ASSIGNED") {
-      return res.status(400).json({ message: "Load must be ASSIGNED before pickup" });
-    }
+    validateTransition(loadCheck.status, "IN_TRANSIT", "TRUCKER");
 
-    updateStatus(load, "IN_TRANSIT", req.user.id);
-    await load.save();
-    res.json({ message: "Load picked up", load });
+    const updatedLoad = await executeAtomicTransition(
+      loadId, 
+      "ASSIGNED", 
+      "IN_TRANSIT", 
+      req.user.id
+    );
+
+    res.json({ message: "Load picked up", load: updatedLoad });
   } catch (err) {
-    res.status(500).json({ message: "Failed to pickup load", error: err.message });
+    res.status(400).json({ message: err.message });
   }
 };
 
 exports.deliverLoad = async (req, res) => {
   try {
     const { loadId } = req.params;
-    const load = await Load.findById(loadId);
     
-    if (!load) return res.status(404).json({ message: "Load not found" });
-    if (String(load.assignedTo) !== req.user.id) return res.status(403).json({ message: "Not assigned to you" });
+    const loadCheck = await Load.findById(loadId);
+    if (!loadCheck) return res.status(404).json({ message: "Load not found" });
+    if (String(loadCheck.assignedTo) !== req.user.id) return res.status(403).json({ message: "Not assigned to you" });
 
-    if (load.status !== "IN_TRANSIT") {
-      return res.status(400).json({ message: "Load is not in transit" });
-    }
+    validateTransition(loadCheck.status, "DELIVERED", "TRUCKER");
 
-    updateStatus(load, "DELIVERED", req.user.id);
-    await load.save();
-    res.json({ message: "Load delivered", load });
+    const updatedLoad = await executeAtomicTransition(
+      loadId, 
+      "IN_TRANSIT", 
+      "DELIVERED", 
+      req.user.id
+    );
+
+    res.json({ message: "Load delivered", load: updatedLoad });
   } catch (err) {
-    res.status(500).json({ message: "Failed to deliver load", error: err.message });
+    res.status(400).json({ message: err.message });
   }
 };

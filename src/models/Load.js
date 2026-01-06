@@ -2,73 +2,49 @@ const mongoose = require("mongoose");
 
 const loadSchema = new mongoose.Schema(
   {
+    // OWNER (Business)
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: true
+      required: true,
+      index: true
     },
+
+    // ASSIGNEE (Trucker)
     assignedTo: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      default: null
+      default: null,
+      index: true
     },
     
-    // Address (Human readable)
-    origin: {
-      type: String,
-      required: true
-    },
-    // GeoJSON for geospatial queries
+    // Future: List of truckers who requested this load (Bidding/Matching queue)
+    requestedTruckers: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User"
+    }],
+
+    // LOGISTICS DETAILS
+    origin: { type: String, required: true },
     originLocation: {
-      type: {
-        type: String,
-        enum: ["Point"]
-      },
-      coordinates: {
-        type: [Number], // [longitude, latitude]
-        index: "2dsphere"
-      }
+      type: { type: String, enum: ["Point"] },
+      coordinates: { type: [Number], index: "2dsphere" } // [lng, lat]
     },
 
-    destination: {
-      type: String,
-      required: true
-    },
+    destination: { type: String, required: true },
     destinationLocation: {
-      type: {
-        type: String,
-        enum: ["Point"]
-      },
-      coordinates: {
-        type: [Number] // [longitude, latitude]
-      }
+      type: { type: String, enum: ["Point"] },
+      coordinates: { type: [Number] }
     },
 
-    vehicleTypeRequired: {
-      type: String,
-      required: true
-    },
-    cargoType: {
-      type: String,
-      required: true
-    },
-    weight: {
-      type: Number, // in kg or tons
-      required: true
-    },
-    price: {
-      type: Number,
-      required: true
-    },
-    
-    // New fields for Phase 2
-    distance: {
-      type: Number // in km
-    },
-    ratePerKm: {
-      type: Number
-    },
+    vehicleTypeRequired: { type: String, required: true },
+    cargoType: { type: String, required: true },
+    weight: { type: Number, required: true },
+    price: { type: Number, required: true },
+    distance: { type: Number },
+    ratePerKm: { type: Number },
 
+    // STATUS FLOW
     status: {
       type: String,
       enum: [
@@ -84,11 +60,12 @@ const loadSchema = new mongoose.Schema(
       index: true
     },
     
-    pickupDate: {
-      type: Date,
-      required: true
-    },
+    // TIMESTAMPS (Explicit for easy querying)
+    pickupDate: { type: Date, required: true },
+    pickedUpAt: { type: Date },
+    deliveredAt: { type: Date },
 
+    // AUDIT TRAIL
     history: [
       {
         status: String,
@@ -101,9 +78,5 @@ const loadSchema = new mongoose.Schema(
     timestamps: true
   }
 );
-
-// Indexes
-loadSchema.index({ originLocation: "2dsphere" });
-loadSchema.index({ status: 1 });
 
 module.exports = mongoose.model("Load", loadSchema);

@@ -5,6 +5,7 @@ const role = require("../middleware/role.middleware");
 const { 
   createLoad, 
   getMyLoads, 
+  getLoadDetails,
   assignTrucker, 
   cancelLoad, 
   closeLoad,
@@ -29,5 +30,9 @@ router.get("/my-jobs", auth, role(["TRUCKER"]), getMyJobs);
 router.patch("/:loadId/accept", auth, role(["TRUCKER"]), acceptLoad);
 router.patch("/:loadId/pickup", auth, role(["TRUCKER"]), pickupLoad);
 router.patch("/:loadId/deliver", auth, role(["TRUCKER"]), deliverLoad);
+
+// --- Shared Routes ---
+// Must be last to avoid capturing specific paths like "available" or "my-loads" as :loadId
+router.get("/:loadId", auth, getLoadDetails);
 
 module.exports = router;
